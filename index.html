@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Widget planning (Gantt) — version 2026-10-15-e : fiche console ouverte dans un nouvel onglet ; lecture directe de Liste_Action_MEO, identifiants de colonnes corrigés ; ouverture de la fiche dans la console par double-clic ; paramétrage en dur (colonnes de la console), filtre Projet, couleur par groupement, clic = fiche dans la console -->
+<!-- Widget planning (Gantt) — version 2026-10-15-f : références (groupement, porteur…) affichées par leur nom ; fiche console ouverte dans un nouvel onglet ; lecture directe de Liste_Action_MEO, identifiants de colonnes corrigés ; ouverture de la fiche dans la console par double-clic ; paramétrage en dur (colonnes de la console), filtre Projet, couleur par groupement, clic = fiche dans la console -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -3930,9 +3930,43 @@ function formatDateFr(v){
 /* Le planning lit lui-même la table principale : il fonctionne quelle que soit la
    table sur laquelle le widget est posé. Un changement signalé par Grist relance la lecture. */
 let tChargement = null
+/* Une colonne Référence renvoie le n° de ligne visé : on le remplace par la
+   valeur affichée dans Grist (colonne « Afficher » de la référence). */
+async function resoudreReferences(recs){
+    if(!recs.length) return
+    const [tables, cols] = await Promise.all(["_grist_Tables","_grist_Tables_column"].map(t=>grist.docApi.fetchTable(t)))
+    const ti = tables.tableId.indexOf(CONFIG.table)
+    if(ti<0) return
+    const tRef = tables.id[ti]
+    const colIdDe = new Map(cols.id.map((id,i)=>[id, cols.colId[i]]))
+    const utiles = new Set([...Object.values(CONFIG.colonnes), ...CONFIG.filtres.map(f=>f.colonne), ...CONFIG.sousLigne,
+        "ID_Projet_Action_AV", "Axe"])
+    const cacheTables = new Map()
+    for(let i=0;i<cols.id.length;i++){
+        if(cols.parentId[i]!==tRef || !utiles.has(cols.colId[i])) continue
+        const m = String(cols.type[i]||"").match(/^Ref(List)?:(.+)$/)
+        if(!m) continue
+        const cible = m[2], affiche = colIdDe.get(cols.visibleCol ? cols.visibleCol[i] : 0)
+        if(!affiche) continue
+        if(!cacheTables.has(cible)){
+            try{ cacheTables.set(cible, await grist.docApi.fetchTable(cible)) }catch(e){ cacheTables.set(cible, null) }
+        }
+        const t = cacheTables.get(cible)
+        if(!t || !t[affiche]) continue
+        const nom = new Map(t.id.map((id,k)=>[id, displayValue(t[affiche][k])]))
+        const col = cols.colId[i]
+        const conv = v => (typeof v==="number") ? (v ? (nom.has(v) ? nom.get(v) : String(v)) : "") : v
+        recs.forEach(r=>{
+            const v = r[col]
+            if(Array.isArray(v) && v[0]==='L') r[col] = ['L'].concat(v.slice(1).map(conv).filter(x=>x!==""))
+            else r[col] = conv(v)
+        })
+    }
+}
 async function chargerDonnees(){
     try{
         const recs = columnarToRecords(await grist.docApi.fetchTable(CONFIG.table))
+        try{ await resoudreReferences(recs) }catch(e){ console.warn("Références non résolues : "+e.message) }
         const m = mappingsFromConfig(recs)
         const manquantes = Object.entries(CONFIG.colonnes).filter(([k,c])=>!recs.length || !(c in recs[0])).map(([k,c])=>c)
         if(recs.length && manquantes.length)
